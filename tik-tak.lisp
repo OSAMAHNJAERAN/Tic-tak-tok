@@ -1,0 +1,193 @@
+;; =========================================================================
+;; PROJECT: TIC-TAC-TOE AI (OPTIMIZED ANALYZER WITH REPEAT & EXIT)
+;; =========================================================================
+
+(defparameter *initial-board* '(NIL NIL NIL NIL NIL NIL NIL NIL NIL))
+(defparameter *winning-lines* '((0 1 2) (3 4 5) (6 7 8) (0 3 6) (1 4 7) (2 5 8) (0 4 8) (2 4 6)))
+
+;; --- GLOBAL STATS TRACKERS ---
+(defvar *nodes-visited* 0)
+(defvar *total-ai-moves* 0)
+(defvar *optimal-ai-moves* 0)
+
+;; --- UTILITY FUNCTIONS ---
+(defun display-board (b)
+  (format t "~% ~a | ~a | ~a" (or (nth 0 b) "1") (or (nth 1 b) "2") (or (nth 2 b) "3"))
+  (format t "~%-----------")
+  (format t "~% ~a | ~a | ~a" (or (nth 3 b) "4") (or (nth 4 b) "5") (or (nth 5 b) "6"))
+  (format t "~%-----------")
+  (format t "~% ~a | ~a | ~a ~%" (or (nth 6 b) "7") (or (nth 7 b) "8") (or (nth 8 b) "9")))
+
+(defun make-move (board index player)
+  (let ((new-board (copy-list board))) 
+    (setf (nth index new-board) player) 
+    new-board))
+
+(defun check-win (board player)
+  (some (lambda (line) (every (lambda (idx) (eq (nth idx board) player)) line)) *winning-lines*))
+
+(defun board-full-p (board) (not (member nil board)))
+
+(defun get-successors (board player)
+  (let ((successors '()))
+    (dolist (i '(4 0 2 6 8 1 3 5 7)) 
+      (when (null (nth i board)) 
+        (push (make-move board i player) successors)))
+    (nreverse successors)))
+
+;; --- ALGORITHMS ---
+
+(defun dfs-check (board current-player target-player)
+  (incf *nodes-visited*)
+  (cond
+    ((check-win board target-player) t)
+    ((check-win board (if (eq target-player 'X) 'O 'X)) nil)
+    ((board-full-p board) nil)
+    (t (let ((next-p (if (eq current-player 'X) 'O 'X)))
+         (some (lambda (s) (dfs-check s next-p target-player)) (get-successors board current-player))))))
+
+(defun dfs-move (board player)
+  (let ((successors (get-successors board player)))
+    (or (find-if (lambda (s) (dfs-check s (if (eq player 'X) 'O 'X) player)) successors)
+        (first successors))))
+
+(defun count-threats (board player)
+  (let ((count 0))
+    (dolist (line *winning-lines*)
+      (let ((m 0) (e 0))
+        (dolist (idx line) 
+          (cond ((eq (nth idx board) player) (incf m)) 
+                ((null (nth idx board)) (incf e))))
+        (when (and (= m 2) (= e 1)) (incf count))))
+    count))
+
+(defun evaluate-heuristic (board player)
+  (let ((opp (if (eq player 'X) 'O 'X)))
+    (cond ((check-win board player) 10000) 
+          ((check-win board opp) -10000)
+          (t (+ (* (count-threats board player) 100) 
+                (* (count-threats board opp) -1000) 
+                (if (eq (nth 4 board) player) 10 0))))))
+
+(defun heuristic-search (board player)
+  (incf *nodes-visited*)
+  (let* ((succ (get-successors board player)) 
+         (scored (mapcar (lambda (s) (cons (evaluate-heuristic s player) s)) succ)))
+    (if scored (cdar (sort scored #'> :key #'car)) nil)))
+
+(defun get-minimax-score (board depth)
+  (cond ((check-win board 'O) (- 10 depth)) 
+        ((check-win board 'X) (+ depth -10)) 
+        (t 0)))
+
+(defun minimax (board depth is-max alpha beta)
+  (incf *nodes-visited*)
+  (if (or (check-win board 'X) (check-win board 'O) (board-full-p board))
+      (get-minimax-score board depth)
+      (if is-max
+          (let ((v -1000))
+            (dolist (s (get-successors board 'O) v)
+              (setf v (max v (minimax s (1+ depth) nil alpha beta)))
+              (setf alpha (max alpha v))
+              (when (<= beta alpha) (return v)))
+            v)
+          (let ((v 1000))
+            (dolist (s (get-successors board 'X) v)
+              (setf v (min v (minimax s (1+ depth) t alpha beta)))
+              (setf beta (min beta v))
+              (when (<= beta alpha) (return v)))
+            v))))
+
+(defun minimax-search (board player)
+  (let ((best-move nil) (best-score -1000))
+    (dolist (s (get-successors board 'O))
+      (let ((score (minimax s 0 nil -1000 1000)))
+        (when (> score best-score)
+          (setf best-score score)
+          (setf best-move s))))
+    best-move))
+
+;; --- ANALYSIS & TURN MANAGEMENT ---
+
+(defun analyze-move (board move-made)
+  (incf *total-ai-moves*)
+  (let ((best-possible-score -1000) (score-of-move-made -1000))
+    (dolist (s (get-successors board 'O))
+      (let ((score (minimax s 0 nil -1000 1000)))
+        (setf best-possible-score (max best-possible-score score))
+        (if (equal s move-made) (setf score-of-move-made score))))
+    (if (>= score-of-move-made best-possible-score) (incf *optimal-ai-moves*))
+    (cond ((> score-of-move-made 0) "100% (Winning Path)")
+          ((< score-of-move-made 0) "0% (Losing Path)")
+          (t "50% (Forced Draw)"))))
+
+(defun run-turn (board player mode)
+  (setf *nodes-visited* 0)
+  (let ((st (get-internal-run-time)))
+    (let ((next (cond ((= mode 1) (dfs-move board player)) 
+                      ((= mode 2) (heuristic-search board player)) 
+                      ((= mode 3) (minimax-search board player)))))
+      (let* ((et (get-internal-run-time))
+             (time-sec (float (/ (- et st) internal-time-units-per-second)))
+             (mem-kb (/ (* *nodes-visited* 128.0) 1024.0))
+             (win-chance (analyze-move board next)))
+        (format t "~%[AI STATS]")
+        (format t "~% > Algo:        ~a" (cond ((= mode 1) "DFS") ((= mode 2) "HEURISTIC") ((= mode 3) "MINIMAX+AB")))
+        (format t "~% > Time:        ~5f s" time-sec)
+        (format t "~% > Nodes:       ~a" *nodes-visited*)
+        (format t "~% > Memory Est:  ~2f KB" mem-kb)
+        (format t "~% > Win Chance:  ~a" win-chance)
+        (format t "~%-----------------------------~%")
+        next))))
+
+(defun print-final-report ()
+  (if (> *total-ai-moves* 0)
+      (let ((accuracy (* (/ (float *optimal-ai-moves*) *total-ai-moves*) 100)))
+        (format t "~%========================================")
+        (format t "~%      FINAL PERFORMANCE REPORT")
+        (format t "~%========================================")
+        (format t "~% Total AI Moves:     ~a" *total-ai-moves*)
+        (format t "~% Perfect Decisions:  ~a" *optimal-ai-moves*)
+        (format t "~% AI FINAL ACCURACY:  ~2f%" accuracy)
+        (format t "~%========================================~%"))))
+
+(defun play (board player mode)
+  (display-board board)
+  (cond 
+    ((check-win board 'X) (print-final-report) (format t "~%>>> RESULT: X WINS! <<<~%"))
+    ((check-win board 'O) (print-final-report) (format t "~%>>> RESULT: AI WINS! <<<~%"))
+    ((board-full-p board) (print-final-report) (format t "~%>>> RESULT: DRAW! <<<~%"))
+    (t (if (eq player 'X)
+           (let ((input (progn (format t "~%Enter Move (1-9): ") (read))))
+             (let ((m (if (integerp input) (- input 1) -1))) 
+               (if (and (>= m 0) (<= m 8) (null (nth m board))) 
+                   (play (make-move board m 'X) 'O mode) 
+                   (progn (format t "Invalid Move! Enter 1-9.") (play board 'X mode)))))
+           (let ((nxt (run-turn board 'O mode))) 
+             (if nxt (play nxt 'X mode) (format t "AI Stuck")))))))
+
+;; --- MAIN MENU WITH LOOP ---
+
+(defun start-game ()
+  (loop
+    (setf *total-ai-moves* 0)
+    (setf *optimal-ai-moves* 0)
+    (format t "~%========================================")
+    (format t "~%   TIC-TAC-TOE PERFORMANCE ANALYZER")
+    (format t "~%========================================")
+    (format t "~%1. Uninformed (DFS)")
+    (format t "~%2. Informed (Heuristic)")
+    (format t "~%3. Informed (Minimax + AlphaBeta)")
+    (format t "~%4. EXIT")
+    (format t "~%----------------------------------------")
+    (format t "~%Select Option (1-4): ")
+    (let ((choice (read)))
+      (cond
+        ((equal choice 4) 
+         (format t "~%Exiting... Goodbye!~%")
+         (return)) ;; Exits the loop
+        ((member choice '(1 2 3))
+         (play *initial-board* 'X choice))
+        (t (format t "~%Invalid Input. Please choose 1, 2, 3, or 4.~%"))))))
+
+;; (start-game)
